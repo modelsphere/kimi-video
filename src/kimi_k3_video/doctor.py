@@ -11,6 +11,7 @@ from pathlib import Path
 from . import __version__
 from .compat import check_decoder, check_sources, check_targets, check_version
 from .config import VideoConfig, video_config_overrides
+from .placement import tokenizer_gpus
 
 
 def main(argv=None):
@@ -37,6 +38,7 @@ def main(argv=None):
             "runtime_sources": check_sources(),
             "max_frames": overrides.get("max_num_frames_each_video"),
             "video_overrides": overrides,
+            "tokenizer_gpus": tokenizer_gpus(),
         }
         result["decoder"] = check_decoder()
         config = None

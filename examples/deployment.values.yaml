@@ -1,4 +1,7 @@
 env:
+  # One visible CUDA index per tokenizer worker; unset to retain base_gpu_id.
+  # - name: KIMI_K3_TOKENIZER_GPUS
+  #   value: "0,2,4,6"
   # Optional video overrides: uncomment as needed; otherwise use model defaults.
   # - name: KIMI_K3_VIDEO_SAMPLE_FPS
   #   value: "4"

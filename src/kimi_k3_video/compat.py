@@ -75,6 +75,9 @@ def _contains_hook(fn, hook):
     seen = set()
     while callable(fn) and id(fn) not in seen:
         seen.add(id(fn))
+        # Classmethod lookup returns a bound method; the hook closure belongs
+        # to its underlying function, just like an ordinary instance method.
+        fn = getattr(fn, "__func__", fn)
         if inspect.isfunction(fn):
             closure = inspect.getclosurevars(fn)
             if closure.nonlocals.get("hook") is hook:

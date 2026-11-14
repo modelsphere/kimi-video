@@ -93,7 +93,7 @@ Build from the repository root, then copy the wheel into the SGLang container:
 python3 -m build --wheel
 
 # Inside the SGLang container:
-python3 -m pip install --no-deps \
+python3 -m pip install --no-deps --force-reinstall \
   /tmp/sglang_kimi_k3_video-0.0.2-py3-none-any.whl
 
 export SGLANG_PLUGINS="${SGLANG_PLUGINS:+${SGLANG_PLUGINS},}kimi_k3_video"
@@ -104,6 +104,34 @@ kimi-k3-video-doctor --check-hooks --model-path /model
 
 # Restart SGLang with its original command in this shell.
 ```
+
+### Tokenizer worker GPUs
+
+By default all tokenizer workers preprocess on SGLang's `base_gpu_id`.
+To give each of the four reference workers a different GPU, set this before launch:
+
+```sh
+export KIMI_K3_TOKENIZER_GPUS=0,2,4,6
+bash examples/run_integration.sh
+```
+
+Provide exactly one distinct GPU index per `--tokenizer-worker-num`. Indices refer
+to CUDA-visible devices **after** `CUDA_VISIBLE_DEVICES` remapping. Workers claim
+available slots at initialization; startup logs show PID, slot and GPU. Slots are
+released on process exit, including crashes, and replacement workers reuse them.
+The assignment order follows startup order, not PID or request order.
+
+This places Kimi-K3.1 tokenizer-side image/video GPU preprocessing and feature
+transport pools on the selected GPUs. Text tokenization remains on CPU; model
+execution and TP/DCP/EP placement are unchanged. Native deferred image processing
+still executes in the scheduler. GPU feature transport retains its existing
+requirements for peer access between producer and consumer GPUs. Each selected
+GPU needs headroom alongside any model workers using it.
+
+The launch script forwards this variable into Docker; for Helm uncomment it in
+`env` in the deployment values. Recreate/restart the service after changing it;
+unset it to restore SGLang placement. Keep
+`SGLANG_HTTP_SERVER_APP_PATH=kimi_k3_video.http_app:app` for multiple workers.
 
 ### Deployment example
 

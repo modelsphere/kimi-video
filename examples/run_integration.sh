@@ -44,6 +44,7 @@ docker run --init --detach \
   --env SGLANG_CUSTOM_ALL_REDUCE_V2_MAX_SIZE_KB=32768 \
   --env "SGLANG_PLUGINS=${SGLANG_PLUGINS:+${SGLANG_PLUGINS},}kimi_k3_video" \
   --env SGLANG_HTTP_SERVER_APP_PATH=kimi_k3_video.http_app:app \
+  --env KIMI_K3_TOKENIZER_GPUS \
   --env KIMI_K3_VIDEO_MAX_FRAMES \
   --env KIMI_K3_VIDEO_SAMPLE_FPS \
   --env KIMI_K3_VIDEO_TEMPORAL_MERGE_KERNEL_SIZE \

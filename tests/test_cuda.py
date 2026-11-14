@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -90,6 +93,124 @@ def test_cuda_video_preprocessing_bounds_source_resolution_peak(config_values):
     peak = torch.cuda.max_memory_allocated() - baseline
     print(f"preprocess_peak_allocated={peak} bytes ({peak / 1024**2:.3f} MiB)")
     assert peak < 128 * 1024 * 1024
+
+
+def test_cuda_four_tokenizer_workers_place_images_video_and_pools(
+    config_values, tmp_path
+):
+    if torch.cuda.device_count() < 4:
+        pytest.skip("Four visible CUDA devices are required")
+    # Use spawned processes just like the HTTP workers, with the real plugin
+    # loader and native image/video operators. No model weights are loaded.
+    script = tmp_path / "four_gpu_workers.py"
+    script.write_text(
+        """
+import multiprocessing as mp
+import os
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+
+def worker(queue, stop):
+    import torch
+    import kimi_k3_video.http_app
+    from PIL import Image
+    from kimi_k3_video import placement
+    from kimi_k3_video.config import VideoConfig
+    from kimi_k3_video.preprocess import preprocess_visual_items
+    from kimi_k3_video.sampling import VisualItem
+    from sglang.srt.managers.schedule_batch import MultimodalDataItem, Modality
+    from sglang.srt.multimodal.processors.kimi_k3 import (
+        KimiK3GPUProcessorWrapper, KimiK3ImageProcessor,
+    )
+    from sglang.srt.multimodal.transport.cuda_ipc import MmItemMemoryPool
+
+    values = __CONFIG__
+    manager = SimpleNamespace(
+        model_config=SimpleNamespace(hf_config=SimpleNamespace(model_type='kimi_k31')),
+        server_args=SimpleNamespace(base_gpu_id=0, tokenizer_worker_num=4,
+                                    host='test-only', port=os.getppid()),
+    )
+    def initialize(owner):
+        gpu = owner.server_args.base_gpu_id
+        torch.cuda.set_per_process_memory_fraction(0.005, gpu)
+        owner.pool = MmItemMemoryPool(1024 * 1024, 60, gpu, consumer_count=1)
+    placement.init_tokenizer_processor(initialize, manager)
+    gpu = manager.server_args.base_gpu_id
+    try:
+        wrapper = KimiK3GPUProcessorWrapper(
+            SimpleNamespace(image_processor=None, tokenizer=None, media_processor=None),
+            '<|media_pad|>', 99, SimpleNamespace(**values),
+        )
+        native = KimiK3ImageProcessor.__new__(KimiK3ImageProcessor)
+        native._processor = wrapper
+        native.mm_feature_transport = 'cuda_ipc'
+        def preprocess():
+            # A new thread defaults to cuda:0. Native image code uses bare cuda;
+            # the plugin hook must bind the worker GPU in this thread.
+            with Image.new('RGB', (28, 28)) as image:
+                image_features = wrapper.prepare_image_features([image])[0]
+                artifacts = native.prepare_artifact_batch([SimpleNamespace(
+                    media=image, content_digest='test-image',
+                    artifact_key='sha256:' + 'a' * 64,
+                )])
+            # Feature hashing calls bare .cuda() upstream. It must not copy
+            # nonzero-worker tensors to the new thread's default GPU 0.
+            mm_item = MultimodalDataItem(modality=Modality.IMAGE,
+                                         feature=image_features[0])
+            native._precompute_hashes_before_cpu_transfer([mm_item])
+            assert isinstance(mm_item.hash, int)
+            assert artifacts[0].feature.device.index == gpu
+            if gpu != 0:
+                assert torch.cuda.memory_reserved(0) == 0
+            item = VisualItem('video', 0, (torch.zeros(3, 28, 28, dtype=torch.uint8),),
+                              28, 28, 16)
+            config = VideoConfig.from_mapping(values)
+            resize = dict(new_width=28, new_height=28, pad_width=0, pad_height=0,
+                          num_tokens=1)
+            video_features, _ = preprocess_visual_items([item], config, [resize],
+                                                        device=f'cuda:{gpu}')
+            return image_features[0].device.index, video_features[0].device.index
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            image_gpu, video_gpu = executor.submit(preprocess).result()
+        queue.put((gpu, manager.pool.memory_pool.device.index, image_gpu, video_gpu))
+        if not stop.wait(90):
+            raise TimeoutError('Parent did not release workers')
+    finally:
+        manager.pool.shutdown()
+
+if __name__ == '__main__':
+    os.environ['KIMI_K3_TOKENIZER_GPUS'] = '0,1,2,3'
+    os.environ['SGLANG_PLUGINS'] = 'kimi_k3_video'
+    ctx = mp.get_context('spawn')
+    queue, stop = ctx.Queue(), ctx.Event()
+    workers = [ctx.Process(target=worker, args=(queue, stop)) for _ in range(4)]
+    try:
+        for process in workers:
+            process.start()
+        results = [queue.get(timeout=120) for _ in workers]
+        assert {row[0] for row in results} == {0, 1, 2, 3}, results
+        assert all(len(set(row)) == 1 for row in results), results
+        print('Four worker GPU placements:', sorted(results), flush=True)
+    finally:
+        stop.set()
+        for process in workers:
+            if process.pid is not None:
+                process.join(timeout=15)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=15)
+    assert all(process.exitcode == 0 for process in workers)
+""".replace("__CONFIG__", repr(config_values))
+    )
+    result = subprocess.run(
+        [sys.executable, str(script)],
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+        capture_output=True,
+        text=True,
+        timeout=200,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout)
 
 
 if __name__ == "__main__":

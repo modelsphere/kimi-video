@@ -66,7 +66,7 @@ print('PID:' + str(os.getpid()))
 def test_installed_sources_match_pinned_interfaces():
     run_runtime(
         "from kimi_k3_video.compat import check_sources, check_version; "
-        "check_version(); assert check_sources()['checked_files'] == 19"
+        "check_version(); assert check_sources()['checked_files'] == 21"
     )
 
 

@@ -7,6 +7,7 @@ import logging
 from . import __version__
 from .config import video_config_overrides
 from .messages import apply_template, convert_request, prepare_messages
+from .placement import init_tokenizer_processor, on_worker_gpu, tokenizer_gpus
 from .processor import process_mm_data
 from .usage import compute_token_counts
 from .vision import position_embeddings
@@ -15,8 +16,19 @@ CHAT = "sglang.srt.entrypoints.openai.serving_chat.OpenAIServingChat"
 PROCESSOR = "sglang.srt.multimodal.processors.kimi_k3.KimiK3ImageProcessor"
 POSITION = "sglang.srt.models.kimi_k3_vl.Learnable2DInterpPosEmbDividedFixed"
 INPUTS = "sglang.srt.managers.schedule_batch.MultimodalInputs"
+TOKENIZER = "sglang.srt.managers.tokenizer_manager.TokenizerManager"
+WRAPPER = "sglang.srt.multimodal.processors.kimi_k3.KimiK3GPUProcessorWrapper"
+GRID = "sglang.srt.multimodal.processors.kimi_common.KimiGridMMDataMixin"
+BASE = "sglang.srt.multimodal.processors.base_processor.BaseMultimodalProcessor"
 
 HOOKS = (
+    (f"{TOKENIZER}.init_tokenizer_and_processor", init_tokenizer_processor, ()),
+    (f"{WRAPPER}.__call__", on_worker_gpu, ("text", "images")),
+    (f"{WRAPPER}.prepare_image_features", on_worker_gpu, ("images",)),
+    (f"{GRID}._load_single_item", on_worker_gpu, ("data", "modality")),
+    (f"{PROCESSOR}.prepare_artifact_batch", on_worker_gpu, ("entries",)),
+    (f"{BASE}._precompute_hashes_before_cpu_transfer", on_worker_gpu, ("mm_items",)),
+    (f"{BASE}._finalize_mm_items", on_worker_gpu, ("mm_items", "images")),
     (
         f"{CHAT}._convert_to_internal_request",
         convert_request,
@@ -47,6 +59,7 @@ def register():
 
     check_version()
     video_config_overrides()
+    tokenizer_gpus()
     from sglang.srt.plugins.hook_registry import HookRegistry, HookType
 
     added = 0
